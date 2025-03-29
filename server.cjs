@@ -1,12 +1,8 @@
-import express from 'express';
-import multer from 'multer';
-import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require('express');
+const multer = require('multer');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 
 // Ensure directories exist
 const publicDir = path.join(__dirname, 'public');
@@ -28,13 +24,13 @@ app.use(cors());
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
-  destination: function (req: express.Request, file: Express.Multer.File, cb: (error: Error | null, destination: string) => void) {
+  destination: function (req, file, cb) {
     // Choose directory based on file type
     const isAudio = file.mimetype.startsWith('audio/');
     const uploadDir = isAudio ? croppedAudioDir : croppedImagesDir;
     cb(null, uploadDir);
   },
-  filename: function (req: express.Request, file: Express.Multer.File, cb: (error: Error | null, filename: string) => void) {
+  filename: function (req, file, cb) {
     const now = new Date();
     const timestamp = now.toISOString().replace(/[:.]/g, '-');
     // Preserve the original extension for audio files
@@ -53,13 +49,13 @@ const upload = multer({ storage: storage });
 app.use(express.static(publicDir));
 
 // Log requests to debug path issues
-app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`);
   next();
 });
 
 // Handle file uploads (both image and audio)
-app.post('/api/upload', upload.single('file'), async (req: express.Request, res: express.Response) => {
+app.post('/api/upload', upload.single('file'), async (req, res) => {
   console.log('Received upload request');
   console.log('File details:', {
     file: req.file,
@@ -103,4 +99,4 @@ app.listen(PORT, () => {
   console.log(`Serving static files from: ${publicDir}`);
   console.log(`Cropped images directory: ${croppedImagesDir}`);
   console.log(`Cropped audio directory: ${croppedAudioDir}`);
-});
+}); 

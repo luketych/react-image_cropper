@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { Mp3Encoder } from 'lamejs';
 import './AudioCropper.css';
 
 export interface AudioCropperProps {
@@ -22,6 +23,10 @@ export interface AudioCropperProps {
    * @param filename - The filename of the saved audio
    */
   onSave?: (filePath: string, filename: string) => void;
+  /**
+   * Output format for the cropped audio
+   */
+  outputFormat?: 'wav' | 'mp3';
 }
 
 export const AudioCropper: React.FC<AudioCropperProps> = ({
@@ -29,6 +34,7 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   fileNamePrefix = 'cropped-audio',
   onCropComplete,
   onSave,
+  outputFormat: initialOutputFormat = 'mp3',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -38,6 +44,7 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   const [endTime, setEndTime] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
+  const [outputFormat, setOutputFormat] = useState<'wav' | 'mp3'>(initialOutputFormat);
 
   useEffect(() => {
     let isMounted = true;
@@ -63,16 +70,23 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
         });
 
         // Add event listeners
-        wavesurfer.on('ready', () => {
+        wavesurfer.on('ready', async () => {
           if (!isMounted) return;
           const duration = wavesurfer.getDuration();
           setDuration(duration);
           setEndTime(duration);
           setIsLoaded(true);
-          // Store the decoded audio data
-          const audioData = (wavesurfer as any).backend?.buffer;
-          if (audioData) {
-            setAudioBuffer(audioData);
+
+          // Get the audio buffer
+          try {
+            const audioContext = new AudioContext();
+            const response = await fetch(src);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            setAudioBuffer(audioBuffer);
+            console.log('Audio buffer loaded successfully');
+          } catch (err) {
+            console.error('Error loading audio buffer:', err);
           }
         });
 
@@ -116,15 +130,21 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   };
 
   const handleSave = async () => {
-    if (!isLoaded || !audioBuffer) return;
+    console.log('Save button clicked');
+    if (!isLoaded || !audioBuffer) {
+      console.log('Audio not loaded or buffer not available:', { isLoaded, hasBuffer: !!audioBuffer });
+      return;
+    }
 
     try {
+      console.log('Starting save process...');
       // Calculate start and end samples
       const sampleRate = audioBuffer.sampleRate;
       const startSample = Math.floor(startTime * sampleRate);
       const endSample = Math.floor(endTime * sampleRate);
       const length = endSample - startSample;
 
+      console.log('Creating new buffer...');
       // Create new buffer for the cropped section
       const audioContext = new AudioContext();
       const newBuffer = audioContext.createBuffer(
@@ -142,61 +162,126 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
         }
       }
 
-      // Create WAV file
-      const wavBlob = await new Promise<Blob>((resolve) => {
-        const { numberOfChannels, sampleRate } = newBuffer;
-        const length = newBuffer.length * 2 * numberOfChannels;
-        const buffer = new ArrayBuffer(44 + length);
-        const view = new DataView(buffer);
+      let blob: Blob;
+      if (outputFormat === 'mp3') {
+        console.log('Converting to MP3...');
+        // Convert to MP3
+        const mp3Encoder = new Mp3Encoder(
+          newBuffer.numberOfChannels,
+          newBuffer.sampleRate,
+          128
+        );
 
-        // Write WAV header
-        const writeString = (offset: number, string: string) => {
-          for (let i = 0; i < string.length; i++) {
-            view.setUint8(offset + i, string.charCodeAt(i));
+        // Process each channel separately
+        const channels: Int16Array[] = [];
+        for (let channel = 0; channel < newBuffer.numberOfChannels; channel++) {
+          const channelData = newBuffer.getChannelData(channel);
+          const samples = new Int16Array(channelData.length);
+          for (let i = 0; i < channelData.length; i++) {
+            // Convert float32 to int16
+            samples[i] = Math.max(-1, Math.min(1, channelData[i])) * 0x7FFF;
           }
-        };
-
-        writeString(0, 'RIFF');
-        view.setUint32(4, 36 + length, true);
-        writeString(8, 'WAVE');
-        writeString(12, 'fmt ');
-        view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true);
-        view.setUint16(22, numberOfChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * numberOfChannels * 2, true);
-        view.setUint16(32, numberOfChannels * 2, true);
-        view.setUint16(34, 16, true);
-        writeString(36, 'data');
-        view.setUint32(40, length, true);
-
-        // Write audio data
-        let offset = 44;
-        for (let i = 0; i < newBuffer.length; i++) {
-          for (let channel = 0; channel < numberOfChannels; channel++) {
-            const sample = newBuffer.getChannelData(channel)[i];
-            const scaled = Math.max(-1, Math.min(1, sample));
-            view.setInt16(offset, scaled * 0x7FFF, true);
-            offset += 2;
-          }
+          channels.push(samples);
         }
 
-        resolve(new Blob([buffer], { type: 'audio/wav' }));
-      });
+        // Encode the audio data in chunks to avoid memory issues
+        const chunkSize = 1152; // Standard MP3 frame size
+        const mp3Data: Uint8Array[] = [];
+        
+        for (let i = 0; i < channels[0].length; i += chunkSize) {
+          const chunk = channels.map(channel => 
+            channel.slice(i, i + chunkSize)
+          );
+          const encoded = mp3Encoder.encodeBuffer(
+            chunk[0],
+            newBuffer.numberOfChannels === 2 ? chunk[1] : undefined
+          );
+          if (encoded.length > 0) {
+            mp3Data.push(encoded);
+          }
+        }
+        
+        const mp3End = mp3Encoder.flush();
+        if (mp3End.length > 0) {
+          mp3Data.push(mp3End);
+        }
 
+        // Combine all chunks
+        const totalLength = mp3Data.reduce((acc, chunk) => acc + chunk.length, 0);
+        const mp3Array = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of mp3Data) {
+          mp3Array.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        blob = new Blob([mp3Array], { type: 'audio/mp3' });
+      } else {
+        console.log('Creating WAV file...');
+        // Create WAV file
+        const wavBlob = await new Promise<Blob>((resolve) => {
+          const { numberOfChannels, sampleRate } = newBuffer;
+          const length = newBuffer.length * 2 * numberOfChannels;
+          const buffer = new ArrayBuffer(44 + length);
+          const view = new DataView(buffer);
+
+          // Write WAV header
+          const writeString = (offset: number, string: string) => {
+            for (let i = 0; i < string.length; i++) {
+              view.setUint8(offset + i, string.charCodeAt(i));
+            }
+          };
+
+          writeString(0, 'RIFF');
+          view.setUint32(4, 36 + length, true);
+          writeString(8, 'WAVE');
+          writeString(12, 'fmt ');
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, numberOfChannels, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, sampleRate * numberOfChannels * 2, true);
+          view.setUint16(32, numberOfChannels * 2, true);
+          view.setUint16(34, 16, true);
+          writeString(36, 'data');
+          view.setUint32(40, length, true);
+
+          // Write audio data
+          let offset = 44;
+          for (let i = 0; i < newBuffer.length; i++) {
+            for (let channel = 0; channel < numberOfChannels; channel++) {
+              const sample = newBuffer.getChannelData(channel)[i];
+              const scaled = Math.max(-1, Math.min(1, sample));
+              view.setInt16(offset, scaled * 0x7FFF, true);
+              offset += 2;
+            }
+          }
+
+          resolve(new Blob([buffer], { type: 'audio/wav' }));
+        });
+        blob = wavBlob;
+      }
+
+      console.log('Sending to server...');
       // Send to server
       const formData = new FormData();
-      formData.append('file', wavBlob, 'cropped.wav');
+      const extension = outputFormat === 'mp3' ? '.mp3' : '.wav';
+      formData.append('file', blob, `cropped${extension}`);
 
       const response = await fetch('http://localhost:3001/api/upload', {
         method: 'POST',
         body: formData
       });
 
-      if (!response.ok) throw new Error('Failed to save audio');
+      if (!response.ok) {
+        console.error('Server response not OK:', response.status, response.statusText);
+        throw new Error('Failed to save audio');
+      }
 
       const { filePath, filename } = await response.json();
+      console.log('Save successful:', { filePath, filename });
       onSave?.(filePath, filename);
+      onCropComplete?.(blob);
 
     } catch (err) {
       console.error('Error saving audio:', err);
@@ -232,6 +317,18 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
           />
           <span>{formatTime(endTime)}</span>
         </div>
+      </div>
+      <div className="format-selector">
+        <label>
+          Output Format:
+          <select
+            value={outputFormat}
+            onChange={(e) => setOutputFormat(e.target.value as 'wav' | 'mp3')}
+          >
+            <option value="mp3">MP3</option>
+            <option value="wav">WAV</option>
+          </select>
+        </label>
       </div>
       <button 
         onClick={handleSave}

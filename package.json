@@ -14,7 +14,9 @@
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "build:server": "tsc --project tsconfig.server.json",
+    "start:server": "node --experimental-specifier-resolution=node dist/server.js"
   },
   "dependencies": {
     "@emotion/react": "^11.10.6",
@@ -24,6 +26,7 @@
     "@types/wavesurfer.js": "^6.0.12",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "lamejs": "^1.2.1",
     "multer": "^1.4.5-lts.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -37,6 +40,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
     "@types/multer": "^1.4.12",
+    "@types/node": "^22.13.14",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",

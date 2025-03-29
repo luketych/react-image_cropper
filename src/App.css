@@ -1,10 +1,35 @@
 .app-container {
   display: flex;
   flex-direction: column;
-  gap: 30px;
+  gap: 20px;
   padding: 20px;
   max-width: 1200px;
   margin: 0 auto;
+}
+
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tab {
+  padding: 10px 20px;
+  font-size: 16px;
+  background: white;
+  border: 2px solid #1976d2;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab:hover {
+  background: #e3f2fd;
+}
+
+.tab.active {
+  background: #1976d2;
+  color: white;
 }
 
 h2 {
@@ -20,7 +45,7 @@ h2 {
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-.saved-images-section {
+.saved-section {
   background: white;
   border-radius: 8px;
   padding: 20px;
@@ -30,5 +55,10 @@ h2 {
 @media (max-width: 768px) {
   .app-container {
     padding: 10px;
+  }
+
+  .tab {
+    flex: 1;
+    text-align: center;
   }
 }

@@ -166,6 +166,9 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
       if (outputFormat === 'mp3') {
         console.log('Converting to MP3...');
         // Convert to MP3
+        // Explicitly initialize lamejs
+        // const Lame = require('lamejs');
+        // const mp3Encoder = new Lame.Mp3Encoder(
         const mp3Encoder = new Mp3Encoder(
           newBuffer.numberOfChannels,
           newBuffer.sampleRate,

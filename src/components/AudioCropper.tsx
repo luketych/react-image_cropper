@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React, { useState, useRef, useEffect } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { Mp3Encoder } from 'lamejs';
@@ -45,6 +46,7 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   const [isLoaded, setIsLoaded] = useState(false);
   const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
   const [outputFormat, setOutputFormat] = useState<'wav' | 'mp3'>(initialOutputFormat);
+  const [savedSegments, setSavedSegments] = useState<{ start: number; end: number; duration: number }[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -61,12 +63,12 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
         // Create new instance
         const wavesurfer = WaveSurfer.create({
           container: containerRef.current,
-          waveColor: '#4a9eff',
-          progressColor: '#1976d2',
-          cursorColor: '#1976d2',
-          height: 100,
+          waveColor: '#4d4d4d',
+          progressColor: '#0066cc',
+          cursorColor: '#0066cc',
+          height: 150,
           normalize: true,
-          backend: 'WebAudio'
+          backend: 'WebAudio',
         });
 
         // Add event listeners
@@ -165,10 +167,6 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
       let blob: Blob;
       if (outputFormat === 'mp3') {
         console.log('Converting to MP3...');
-        // Convert to MP3
-        // Explicitly initialize lamejs
-        // const Lame = require('lamejs');
-        // const mp3Encoder = new Lame.Mp3Encoder(
         const mp3Encoder = new Mp3Encoder(
           newBuffer.numberOfChannels,
           newBuffer.sampleRate,
@@ -283,6 +281,14 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
 
       const { filePath, filename } = await response.json();
       console.log('Save successful:', { filePath, filename });
+      
+      // Add to saved segments
+      setSavedSegments(prev => [...prev, {
+        start: startTime,
+        end: endTime,
+        duration: endTime - startTime
+      }]);
+      
       onSave?.(filePath, filename);
       onCropComplete?.(blob);
 
@@ -293,53 +299,93 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
 
   return (
     <div className="audio-cropper">
-      <div className="waveform" ref={containerRef} />
-      <div className="controls">
-        <div className="time-controls">
-          <input
-            type="range"
-            min={0}
-            max={duration}
-            value={startTime}
-            onChange={(e) => setStartTime(parseFloat(e.target.value))}
-            disabled={!isLoaded}
+      <div className="editor-section">
+        <div className="waveform" ref={containerRef}>
+          <div
+            className="selection-overlay"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: `${(startTime / duration) * 100}%`,
+              width: `${((endTime - startTime) / duration) * 100}%`,
+              height: "100%",
+              backgroundColor: "rgba(0, 102, 204, 0.2)",
+              pointerEvents: "none",
+            }}
           />
-          <span>{formatTime(startTime)}</span>
         </div>
-        <button onClick={togglePlay} disabled={!isLoaded}>
-          {isPlaying ? 'Pause' : 'Play'}
-        </button>
-        <div className="time-controls">
-          <input
-            type="range"
-            min={0}
-            max={duration}
-            value={endTime}
-            onChange={(e) => setEndTime(parseFloat(e.target.value))}
-            disabled={!isLoaded}
-          />
-          <span>{formatTime(endTime)}</span>
+        <div className="controls">
+          <div className="time-controls">
+            <label>
+              Start Time:
+              <input
+                type="number"
+                min={0}
+                max={duration}
+                value={startTime}
+                onChange={(e) => setStartTime(Math.max(0, Math.min(duration, parseFloat(e.target.value))))}
+                disabled={!isLoaded}
+              />
+            </label>
+            <span>{formatTime(startTime)}</span>
+          </div>
+          <button onClick={togglePlay} disabled={!isLoaded}>
+            {isPlaying ? "Pause" : "Play"}
+          </button>
+          <div className="time-controls">
+            <label>
+              End Time:
+              <input
+                type="number"
+                min={0}
+                max={duration}
+                value={endTime}
+                onChange={(e) => setEndTime(Math.max(0, Math.min(duration, parseFloat(e.target.value))))}
+                disabled={!isLoaded}
+              />
+            </label>
+            <span>{formatTime(endTime)}</span>
+          </div>
         </div>
-      </div>
-      <div className="format-selector">
-        <label>
-          Output Format:
-          <select
-            value={outputFormat}
-            onChange={(e) => setOutputFormat(e.target.value as 'wav' | 'mp3')}
+        <div className="format-selector">
+          <label>
+            Output Format:
+            <select
+              value={outputFormat}
+              onChange={(e) => setOutputFormat(e.target.value as 'wav' | 'mp3')}
+            >
+              <option value="mp3">MP3</option>
+              <option value="wav">WAV</option>
+            </select>
+          </label>
+          <button 
+            onClick={handleSave}
+            className="save-button"
+            disabled={!isLoaded || startTime >= endTime}
           >
-            <option value="mp3">MP3</option>
-            <option value="wav">WAV</option>
-          </select>
-        </label>
+            SAVE CROPPED AUDIO
+          </button>
+        </div>
       </div>
-      <button 
-        onClick={handleSave}
-        className="save-button"
-        disabled={!isLoaded || startTime >= endTime}
-      >
-        SAVE CROPPED AUDIO
-      </button>
+      <div className="segments-section">
+        <h3>Saved Segments</h3>
+        {savedSegments.length === 0 ? (
+          <p>No segments saved yet</p>
+        ) : (
+          <div className="saved-segments">
+            {savedSegments.map((segment, index) => (
+              <div key={index} className="segment">
+                <div>
+                  <span>{formatTime(segment.start)}</span>
+                  {" - "}
+                  <span>{formatTime(segment.end)}</span>
+                </div>
+                <span>Duration: {formatTime(segment.duration)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

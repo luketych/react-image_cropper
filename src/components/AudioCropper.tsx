@@ -1,32 +1,72 @@
 /** @jsxImportSource react */
 import React, { useState, useRef, useEffect } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
 import { Mp3Encoder } from 'lamejs';
 import './AudioCropper.css';
 
+interface AudioRegion {
+  id: string;
+  start: number;
+  end: number;
+  remove(): void;
+}
+
+interface RegionsList {
+  [key: string]: AudioRegion;
+}
+
+// Extended Regions interface
+interface RegionsInstance {
+  list: RegionsList;
+  add(params: {
+    start: number;
+    end: number;
+    drag?: boolean;
+    resize?: boolean;
+    color?: string;
+  }): AudioRegion;
+  enableDragSelection(options: { color: string }): void;
+}
+
+// WaveSurfer configuration options
+interface WaveSurferOptions {
+  container: HTMLElement | string;
+  height?: number;
+  cursorColor?: string;
+  progressColor?: string;
+  waveColor?: string;
+  minPxPerSec?: number;
+  normalize?: boolean;
+  [key: string]: any;
+}
+
+// WaveSurfer static factory
+interface WaveSurferStatic {
+  create(options: WaveSurferOptions): WaveSurfer;
+}
+
+// Custom event types
+type EventCallback = () => void;
+type RegionCallback = (region: AudioRegion) => void;
+
+// Combined WaveSurfer instance interface with strict typing
+interface CustomWaveSurfer {
+  regions: RegionsInstance;
+  getDuration(): number;
+  destroy(): void;
+  playPause(): Promise<void>;
+  load(url: string): Promise<void>;
+  on(event: 'ready' | 'play' | 'pause', callback: EventCallback): this;
+  on(event: 'region-created' | 'region-updated', callback: RegionCallback): this;
+  once(event: 'ready', callback: EventCallback): this;
+}
+
 export interface AudioCropperProps {
-  /**
-   * The source URL of the audio file to crop
-   */
   src: string;
-  /**
-   * Optional prefix for saved audio files
-   */
   fileNamePrefix?: string;
-  /**
-   * Optional callback when audio is cropped
-   * @param blob - The cropped audio as a Blob
-   */
   onCropComplete?: (blob: Blob) => void;
-  /**
-   * Optional callback when an audio file is saved
-   * @param filePath - The path where the audio was saved
-   * @param filename - The filename of the saved audio
-   */
   onSave?: (filePath: string, filename: string) => void;
-  /**
-   * Output format for the cropped audio
-   */
   outputFormat?: 'wav' | 'mp3';
 }
 
@@ -38,7 +78,7 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   outputFormat: initialOutputFormat = 'mp3',
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const wavesurferRef = useRef<CustomWaveSurfer | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [startTime, setStartTime] = useState(0);
@@ -48,106 +88,27 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
   const [outputFormat, setOutputFormat] = useState<'wav' | 'mp3'>(initialOutputFormat);
   const [savedSegments, setSavedSegments] = useState<{ start: number; end: number; duration: number }[]>([]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const initWaveSurfer = async () => {
-      if (!containerRef.current) return;
-
-      try {
-        // Clean up previous instance
-        if (wavesurferRef.current) {
-          wavesurferRef.current.destroy();
-        }
-
-        // Create new instance
-        const wavesurfer = WaveSurfer.create({
-          container: containerRef.current,
-          waveColor: '#4d4d4d',
-          progressColor: '#0066cc',
-          cursorColor: '#0066cc',
-          height: 150,
-          normalize: true,
-          backend: 'WebAudio',
-        });
-
-        // Add event listeners
-        wavesurfer.on('ready', async () => {
-          if (!isMounted) return;
-          const duration = wavesurfer.getDuration();
-          setDuration(duration);
-          setEndTime(duration);
-          setIsLoaded(true);
-
-          // Get the audio buffer
-          try {
-            const audioContext = new AudioContext();
-            const response = await fetch(src);
-            const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            setAudioBuffer(audioBuffer);
-            console.log('Audio buffer loaded successfully');
-          } catch (err) {
-            console.error('Error loading audio buffer:', err);
-          }
-        });
-
-        wavesurfer.on('play', () => isMounted && setIsPlaying(true));
-        wavesurfer.on('pause', () => isMounted && setIsPlaying(false));
-
-        // Load audio file
-        await wavesurfer.load(src);
-        
-        // Store reference
-        wavesurferRef.current = wavesurfer;
-      } catch (err) {
-        console.error('Error loading audio:', err);
-      }
-    };
-
-    initWaveSurfer();
-
-    return () => {
-      isMounted = false;
-      if (wavesurferRef.current) {
-        try {
-          wavesurferRef.current.destroy();
-        } catch (err) {
-          console.error('Error cleaning up wavesurfer:', err);
-        }
-      }
-    };
-  }, [src]);
-
-  const togglePlay = () => {
-    if (wavesurferRef.current && isLoaded) {
-      wavesurferRef.current.playPause();
-    }
-  };
-
   const formatTime = (time: number) => {
     const minutes = Math.floor(time / 60);
     const seconds = Math.floor(time % 60);
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const handleSave = async () => {
-    console.log('Save button clicked');
-    if (!isLoaded || !audioBuffer) {
-      console.log('Audio not loaded or buffer not available:', { isLoaded, hasBuffer: !!audioBuffer });
-      return;
+  const togglePlay = async () => {
+    if (wavesurferRef.current && isLoaded) {
+      await wavesurferRef.current.playPause();
     }
+  };
+
+  const handleSave = async () => {
+    if (!isLoaded || !audioBuffer) return;
 
     try {
-      console.log('Starting save process...');
-      // Calculate start and end samples
       const sampleRate = audioBuffer.sampleRate;
       const startSample = Math.floor(startTime * sampleRate);
       const endSample = Math.floor(endTime * sampleRate);
       const length = endSample - startSample;
 
-      console.log('Creating new buffer...');
-      // Create new buffer for the cropped section
       const audioContext = new AudioContext();
       const newBuffer = audioContext.createBuffer(
         audioBuffer.numberOfChannels,
@@ -166,27 +127,25 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
 
       let blob: Blob;
       if (outputFormat === 'mp3') {
-        console.log('Converting to MP3...');
         const mp3Encoder = new Mp3Encoder(
           newBuffer.numberOfChannels,
           newBuffer.sampleRate,
           128
         );
 
-        // Process each channel separately
+        // Process each channel
         const channels: Int16Array[] = [];
         for (let channel = 0; channel < newBuffer.numberOfChannels; channel++) {
           const channelData = newBuffer.getChannelData(channel);
           const samples = new Int16Array(channelData.length);
           for (let i = 0; i < channelData.length; i++) {
-            // Convert float32 to int16
             samples[i] = Math.max(-1, Math.min(1, channelData[i])) * 0x7FFF;
           }
           channels.push(samples);
         }
 
-        // Encode the audio data in chunks to avoid memory issues
-        const chunkSize = 1152; // Standard MP3 frame size
+        // Encode in chunks
+        const chunkSize = 1152;
         const mp3Data: Uint8Array[] = [];
         
         for (let i = 0; i < channels[0].length; i += chunkSize) {
@@ -207,7 +166,6 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
           mp3Data.push(mp3End);
         }
 
-        // Combine all chunks
         const totalLength = mp3Data.reduce((acc, chunk) => acc + chunk.length, 0);
         const mp3Array = new Uint8Array(totalLength);
         let offset = 0;
@@ -218,7 +176,6 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
 
         blob = new Blob([mp3Array], { type: 'audio/mp3' });
       } else {
-        console.log('Creating WAV file...');
         // Create WAV file
         const wavBlob = await new Promise<Blob>((resolve) => {
           const { numberOfChannels, sampleRate } = newBuffer;
@@ -226,7 +183,6 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
           const buffer = new ArrayBuffer(44 + length);
           const view = new DataView(buffer);
 
-          // Write WAV header
           const writeString = (offset: number, string: string) => {
             for (let i = 0; i < string.length; i++) {
               view.setUint8(offset + i, string.charCodeAt(i));
@@ -247,7 +203,6 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
           writeString(36, 'data');
           view.setUint32(40, length, true);
 
-          // Write audio data
           let offset = 44;
           for (let i = 0; i < newBuffer.length; i++) {
             for (let channel = 0; channel < numberOfChannels; channel++) {
@@ -263,11 +218,9 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
         blob = wavBlob;
       }
 
-      console.log('Sending to server...');
-      // Send to server
       const formData = new FormData();
       const extension = outputFormat === 'mp3' ? '.mp3' : '.wav';
-      formData.append('file', blob, `cropped${extension}`);
+      formData.append('file', blob, `${fileNamePrefix}${extension}`);
 
       const response = await fetch('http://localhost:3001/api/upload', {
         method: 'POST',
@@ -275,14 +228,11 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
       });
 
       if (!response.ok) {
-        console.error('Server response not OK:', response.status, response.statusText);
         throw new Error('Failed to save audio');
       }
 
       const { filePath, filename } = await response.json();
-      console.log('Save successful:', { filePath, filename });
       
-      // Add to saved segments
       setSavedSegments(prev => [...prev, {
         start: startTime,
         end: endTime,
@@ -297,23 +247,127 @@ export const AudioCropper: React.FC<AudioCropperProps> = ({
     }
   };
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const initWaveSurfer = async () => {
+      if (!containerRef.current) return;
+
+      try {
+        if (wavesurferRef.current) {
+          wavesurferRef.current.destroy();
+        }
+
+        const wavesurfer = (WaveSurfer as unknown as WaveSurferStatic).create({
+          container: containerRef.current,
+          height: 128,
+          cursorColor: '#0066cc',
+          progressColor: '#0066cc',
+          waveColor: '#4d4d4d',
+          minPxPerSec: 100,
+          normalize: true
+        });
+
+        const regions = RegionsPlugin.create();
+        wavesurfer.registerPlugin(regions);
+
+        // Cast to CustomWaveSurfer with proper event handling
+        const ws = {
+          ...wavesurfer,
+          regions: regions as unknown as RegionsInstance,
+          on: (event: string, callback: EventCallback | RegionCallback) => {
+            wavesurfer.on(event, callback as any);
+            return ws;
+          },
+          once: (event: string, callback: EventCallback) => {
+            wavesurfer.once(event, callback);
+            return ws;
+          }
+        } as CustomWaveSurfer;
+
+        wavesurferRef.current = ws;
+
+        ws.once('ready', async () => {
+          if (!isMounted) return;
+          
+          const audioDuration = ws.getDuration();
+          setDuration(audioDuration);
+          setEndTime(audioDuration);
+          setIsLoaded(true);
+
+          try {
+            const audioContext = new AudioContext();
+            const response = await fetch(src);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            setAudioBuffer(audioBuffer);
+          } catch (err) {
+            console.error('Error loading audio buffer:', err);
+          }
+        });
+
+        ws.on('play', () => isMounted && setIsPlaying(true));
+        ws.on('pause', () => isMounted && setIsPlaying(false));
+
+        try {
+          await ws.load(src);
+
+          if (ws.regions) {
+            ws.regions.add({
+              start: 0,
+              end: ws.getDuration(),
+              color: 'rgba(0, 102, 204, 0.2)',
+              drag: true,
+              resize: true
+            });
+
+            ws.on('region-created', (region: AudioRegion) => {
+              if (!isMounted) return;
+              Object.values(ws.regions.list).forEach((existingRegion: AudioRegion) => {
+                if (existingRegion.id !== region.id) {
+                  existingRegion.remove();
+                }
+              });
+              setStartTime(region.start);
+              setEndTime(region.end);
+            });
+
+            ws.on('region-updated', (region: AudioRegion) => {
+              if (!isMounted) return;
+              setStartTime(region.start);
+              setEndTime(region.end);
+            });
+
+            ws.regions.enableDragSelection({
+              color: 'rgba(0, 102, 204, 0.2)'
+            });
+          }
+        } catch (err) {
+          console.error('Error loading audio:', err);
+        }
+      } catch (err) {
+        console.error('Error initializing WaveSurfer:', err);
+      }
+    };
+
+    initWaveSurfer();
+
+    return () => {
+      isMounted = false;
+      if (wavesurferRef.current) {
+        try {
+          wavesurferRef.current.destroy();
+        } catch (err) {
+          console.error('Error cleaning up wavesurfer:', err);
+        }
+      }
+    };
+  }, [src]);
+
   return (
     <div className="audio-cropper">
       <div className="editor-section">
-        <div className="waveform" ref={containerRef}>
-          <div
-            className="selection-overlay"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: `${(startTime / duration) * 100}%`,
-              width: `${((endTime - startTime) / duration) * 100}%`,
-              height: "100%",
-              backgroundColor: "rgba(0, 102, 204, 0.2)",
-              pointerEvents: "none",
-            }}
-          />
-        </div>
+        <div className="waveform" ref={containerRef} />
         <div className="controls">
           <div className="time-controls">
             <label>
